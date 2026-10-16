@@ -15,6 +15,7 @@ tools/*.exe
 
 # Uploaded separately as a GitHub Release
 video_downloader.exe
+video_beam.exe
 
 Thumbs.db
 desktop.ini

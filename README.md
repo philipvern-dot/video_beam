@@ -1,14 +1,26 @@
-# Video Downloader
+# Video Beam
 
-Version 1.0.1
+Version 1.0.2
 
 A Windows program that downloads videos and playlists as MP4 files, or audio only as MP3.
 
-Double-click **Video Downloader** in this folder. If that shortcut does nothing, open `app\launch.vbs` once. That starts the program and repairs the shortcut.
+Double-click **Video Beam** in this folder. If that shortcut does nothing, open `app\launch.vbs` once. That starts the program and repairs the shortcut.
 
 Paste one link, several links, or a playlist. New files go in the `downloads` folder next to the program until you choose another folder. That choice is saved for the next run.
 
-Check for updates looks for a newer version on GitHub. Update downloads that version and opens the setup program. The setup replaces the installed copy and keeps your settings.
+Check for updates looks for a newer version on GitHub. The program also checks when it opens. Update downloads that version and opens the setup program. The setup replaces the installed copy and keeps your settings. The version is shown at the bottom right.
+
+Clip start and Clip end save part of one video. Leave the start blank to begin at the beginning, or the end blank to continue through the end. A playlist or several links are saved in full. The header names the folder new files go to, and the link box shows how many links are ready.
+
+## What's new in 1.0.2
+
+The version appears at the bottom right. The program checks for updates when it opens, and asks once when a newer version is published.
+
+Clip start and Clip end download one section of a single video, as MP4 or MP3. The file name includes the times.
+
+The header names the save folder. The line under the links counts how many links are ready.
+
+`app\blocked-sites.md` installs with the program. A site listed there is not downloaded. The setup can add a Start menu shortcut and a desktop shortcut. Windows can uninstall Video Beam from Apps & features.
 
 ## Tools
 
@@ -19,7 +31,7 @@ The program looks for these files in `tools\`:
 - `ffprobe.exe`
 - `deno.exe`
 
-They are not in this repository. The FFmpeg programs are each larger than GitHub allows. Copy them into `tools\` yourself, or run the Windows setup program `video_downloader.exe`, which installs this program and those tools for the current user, adds a Start menu entry, and registers an uninstall entry.
+They are not in this repository. The FFmpeg programs are each larger than GitHub allows. Copy them into `tools\` yourself, or run the Windows setup program `video_beam.exe`, which installs this program and those tools for the current user, adds a Start menu entry, and registers an uninstall entry.
 
 FFmpeg's license is `tools\FFmpeg-LICENSE.txt`.
 
