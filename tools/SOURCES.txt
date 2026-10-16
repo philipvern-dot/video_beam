@@ -1,0 +1,33 @@
+Third-party programs installed by the Video Beam setup (video_beam.exe)
+=======================================================================
+
+These programs are not stored in this repository. The Windows setup program
+attached to each GitHub Release installs them into the tools\ folder. Each
+keeps its own license.
+
+yt-dlp (yt-dlp.exe)
+  Project:  https://github.com/yt-dlp/yt-dlp
+  Download: https://github.com/yt-dlp/yt-dlp/releases
+  License:  Unlicense (public domain) - see tools/yt-dlp-LICENSE.txt
+  Version:  TODO: fill in the bundled version
+  SHA-256:  TODO: fill in the SHA-256 of the bundled yt-dlp.exe
+
+FFmpeg (ffmpeg.exe, ffprobe.exe)
+  Project:  https://ffmpeg.org/
+  Download: https://ffmpeg.org/download.html  (Windows build provider: TODO)
+  Source:   https://ffmpeg.org/download.html#get-sources
+            https://git.ffmpeg.org/ffmpeg.git
+  License:  GPL-3.0 (GPL build) - see tools/FFmpeg-LICENSE.txt
+  Version:  TODO: fill in the bundled version/build
+  SHA-256:  TODO: ffmpeg.exe  - fill in
+            TODO: ffprobe.exe - fill in
+  The complete corresponding source code for the bundled FFmpeg build is
+  available from the source links above (TODO: link the exact build's source).
+
+Deno (deno.exe)
+  Project:  https://deno.com/
+  Download: https://github.com/denoland/deno/releases
+  Source:   https://github.com/denoland/deno
+  License:  MIT - see tools/Deno-LICENSE.txt
+  Version:  TODO: fill in the bundled version
+  SHA-256:  TODO: fill in the SHA-256 of the bundled deno.exe

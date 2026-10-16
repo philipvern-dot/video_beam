@@ -1,7 +1,7 @@
 ; Builds video_beam.exe, the setup program attached to a GitHub Release.
 ; The tool programs are not in git. This script reads them from the working copy.
 ; Compile with Inno Setup 6:
-;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" VideoDownloader.iss
+;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" VideoBeam.iss
 
 #define AppVersion "1.0.3"
 #define Repo ".."
@@ -43,6 +43,9 @@ Source: "{#Repo}\app\blocked-sites.md"; DestDir: "{app}\app"; Flags: onlyifdoesn
 Source: "{#Repo}\LICENSE"; DestDir: "{app}"
 Source: "{#Repo}\vb-icon.ico"; DestDir: "{app}"
 Source: "{#Repo}\tools\FFmpeg-LICENSE.txt"; DestDir: "{app}\tools"
+Source: "{#Repo}\tools\yt-dlp-LICENSE.txt"; DestDir: "{app}\tools"
+Source: "{#Repo}\tools\Deno-LICENSE.txt"; DestDir: "{app}\tools"
+Source: "{#Repo}\tools\SOURCES.txt"; DestDir: "{app}\tools"
 Source: "{#ToolExe}\yt-dlp.exe"; DestDir: "{app}\tools"
 Source: "{#ToolExe}\ffmpeg.exe"; DestDir: "{app}\tools"
 Source: "{#ToolExe}\ffprobe.exe"; DestDir: "{app}\tools"

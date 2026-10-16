@@ -33,10 +33,16 @@ The program looks for these files in `tools\`:
 
 They are not in this repository. The FFmpeg programs are each larger than GitHub allows. Copy them into `tools\` yourself, or run the Windows setup program `video_beam.exe`, which installs this program and those tools for the current user, adds a Start menu entry, and registers an uninstall entry.
 
-FFmpeg's license is `tools\FFmpeg-LICENSE.txt`.
+Where each tool comes from, its license, and the bundled version are listed in [`tools/SOURCES.txt`](tools/SOURCES.txt). License texts:
+
+- yt-dlp: [`tools/yt-dlp-LICENSE.txt`](tools/yt-dlp-LICENSE.txt) (Unlicense)
+- FFmpeg and ffprobe: [`tools/FFmpeg-LICENSE.txt`](tools/FFmpeg-LICENSE.txt) (GPL-3.0)
+- Deno: [`tools/Deno-LICENSE.txt`](tools/Deno-LICENSE.txt) (MIT)
 
 ## License
 
 This program is released under the MIT License. See [LICENSE](LICENSE).
 
 yt-dlp, FFmpeg, and Deno are separate programs and keep their own licenses. FFmpeg is GPL-3.0.
+
+Do not download copyrighted material!

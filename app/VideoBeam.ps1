@@ -143,7 +143,7 @@ $script:Deno = Join-Path $script:ToolsDir 'deno.exe'
 $script:SettingsPath = Join-Path $script:AppDir 'settings.json'
 $script:ArchiveFile = Join-Path $script:AppDir 'download-history.txt'
 $script:AudioArchiveFile = Join-Path $script:AppDir 'audio-history.txt'
-$script:UpdateRepo = 'video-downloader'
+$script:UpdateRepo = 'video_beam'
 $script:UpdateAsset = 'video_beam.exe'
 $script:UpdateProduct = 'Video Beam'
 $script:UpdateFallback = '1.0.3'
@@ -1899,7 +1899,7 @@ function Get-BugReportUrl {
     param([string]$Activity = '')
     $version = [uri]::EscapeDataString((Get-AppVersion))
     $windows = [uri]::EscapeDataString((Get-WindowsLabel))
-    $url = "https://github.com/philipvern-dot/video-downloader/issues/new?template=bug_report.yml&version=$version&windows=$windows"
+    $url = "https://github.com/philipvern-dot/video_beam/issues/new?template=bug_report.yml&version=$version&windows=$windows"
     if (-not [string]::IsNullOrWhiteSpace($Activity)) {
         $url = $url + '&activity=' + [uri]::EscapeDataString($Activity)
     }
@@ -1909,7 +1909,7 @@ function Get-BugReportUrl {
 function Open-HttpLink([string]$Url) {
     $allowed = $false
     if ($Url -eq 'https://ko-fi.com/philipvern') { $allowed = $true }
-    elseif ($Url.StartsWith('https://github.com/philipvern-dot/video-downloader/issues/new?')) { $allowed = $true }
+    elseif ($Url.StartsWith('https://github.com/philipvern-dot/video_beam/issues/new?')) { $allowed = $true }
     if (-not $allowed) { return }
     Start-Process $Url
 }
@@ -2985,7 +2985,7 @@ function Invoke-SmokeTest {
     Assert-True ($script:DonateButton.Parent -eq $script:Header) 'Donate is not in the header'
     Assert-True ($script:Tips.GetToolTip($script:DonateButton) -eq 'Free forever. Tips of $5 or more can include a feature suggestion.') 'Donate tooltip'
     $bugUrl = Get-BugReportUrl 'saved one file'
-    Assert-True ($bugUrl.StartsWith('https://github.com/philipvern-dot/video-downloader/issues/new?template=bug_report.yml&')) 'Bug report link was not the GitHub form'
+    Assert-True ($bugUrl.StartsWith('https://github.com/philipvern-dot/video_beam/issues/new?template=bug_report.yml&')) 'Bug report link was not the GitHub form'
     Assert-True ($bugUrl -match 'activity=') 'Bug report link dropped the activity'
     Assert-True ($null -ne $script:Form.Icon) 'The window has no icon'
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $script:Root 'Video Beam.lnk'))
@@ -3009,12 +3009,12 @@ function Invoke-SmokeTest {
     Assert-True ($null -eq (Compare-AppVersion 'video_downloader' '1.0.1')) 'A name was treated as a version'
     $sameOffer = Get-UpdateOffer ([pscustomobject]@{
         tag_name = 'v1.0.1'
-        assets = @([pscustomobject]@{ name = 'video_downloader.exe'; browser_download_url = 'https://github.com/philipvern-dot/video-downloader/releases/download/v1.0.1/video_downloader.exe'; size = 12 })
+        assets = @([pscustomobject]@{ name = 'video_downloader.exe'; browser_download_url = 'https://github.com/philipvern-dot/video_beam/releases/download/v1.0.1/video_downloader.exe'; size = 12 })
     })
     Assert-True (-not $sameOffer.Newer) 'The current version was offered as an update'
     $offer = Get-UpdateOffer ([pscustomobject]@{
         tag_name = 'v9.9.9'
-        assets = @([pscustomobject]@{ name = 'video_downloader.exe'; browser_download_url = 'https://github.com/philipvern-dot/video-downloader/releases/download/v9.9.9/video_downloader.exe'; size = 12 })
+        assets = @([pscustomobject]@{ name = 'video_downloader.exe'; browser_download_url = 'https://github.com/philipvern-dot/video_beam/releases/download/v9.9.9/video_downloader.exe'; size = 12 })
     })
     Assert-True ($offer.Newer) 'A newer release was not offered'
     Apply-UpdateOffer $offer
