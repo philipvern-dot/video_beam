@@ -39,6 +39,16 @@ Where each tool comes from, its license, and the bundled version are listed in [
 - FFmpeg and ffprobe: [`tools/FFmpeg-LICENSE.txt`](tools/FFmpeg-LICENSE.txt) (GPL-3.0)
 - Deno: [`tools/Deno-LICENSE.txt`](tools/Deno-LICENSE.txt) (MIT)
 
+## Support
+
+Video Beam is free and always will be.
+
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/philipvern)
+
+- **Tips:** welcome at [ko-fi.com/philipvern](https://ko-fi.com/philipvern). Pick $1, $2, $5, or a custom amount. A tip of $5 or more can include a feature suggestion.
+- **Bugs:** Report a bug in the program opens a GitHub page with this version and the Windows version filled in. Include latest activity is optional. You can also [open an issue](https://github.com/philipvern-dot/video_beam/issues).
+- **Commissions:** I'm open to them. Reach out through Ko-fi.
+
 ## License
 
 This program is released under the MIT License. See [LICENSE](LICENSE).
