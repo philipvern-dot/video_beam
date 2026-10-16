@@ -3,7 +3,7 @@
 ; Compile with Inno Setup 6:
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" VideoDownloader.iss
 
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.3"
 #define Repo ".."
 #define ToolExe "E:\Programming\video_beam\tools"
 
@@ -29,7 +29,7 @@ Uninstallable=yes
 UninstallDisplayName=Video Beam
 UninstallDisplayIcon={app}\vb-icon.ico
 SetupIconFile={#Repo}\vb-icon.ico
-VersionInfoVersion=1.0.2.0
+VersionInfoVersion=1.0.3.0
 VersionInfoProductName=Video Beam
 VersionInfoCompany=Video Beam
 VersionInfoDescription=Installs Video Beam and the tools it needs

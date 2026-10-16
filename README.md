@@ -1,6 +1,6 @@
 # Video Beam
 
-Version 1.0.2
+Version 1.0.3
 
 A Windows program that downloads videos and playlists as MP4 files, or audio only as MP3.
 
@@ -14,7 +14,7 @@ Clip start and Clip end save part of one video. Leave the start blank to begin a
 
 ## What's new in 1.0.2
 
-The version appears at the bottom right. The program checks for updates when it opens, and asks once when a newer version is published.
+The version appears at the bottom right. The program checks for updates when it opens, and asks once when a newer version is published. Donate opens a tip page. Report a bug opens a GitHub page and does not send the report.
 
 Clip start and Clip end download one section of a single video, as MP4 or MP3. The file name includes the times.
 

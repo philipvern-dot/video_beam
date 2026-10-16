@@ -146,7 +146,7 @@ $script:AudioArchiveFile = Join-Path $script:AppDir 'audio-history.txt'
 $script:UpdateRepo = 'video-downloader'
 $script:UpdateAsset = 'video_beam.exe'
 $script:UpdateProduct = 'Video Beam'
-$script:UpdateFallback = '1.0.2'
+$script:UpdateFallback = '1.0.3'
 $script:UpdateOffer = $null
 $script:UpdateClosing = $false
 
@@ -1845,6 +1845,122 @@ function Test-InstalledCopy {
     return $root.StartsWith($programs, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-WindowsLabel {
+    $build = 0
+    try {
+        $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        [void][int]::TryParse([string]$cv.CurrentBuild, [ref]$build)
+    } catch { }
+    $name = 'Windows'
+    if ($build -ge 22000) { $name = 'Windows 11' }
+    elseif ($build -ge 10240) { $name = 'Windows 10' }
+    if ($build -gt 0) { return "$name (build $build)" }
+    return $name
+}
+
+function Get-LatestActivityText {
+    param([int]$MaxEncoded = 4500)
+    if ($null -eq $script:Log) { return '' }
+    $raw = [string]$script:Log.Text
+    if ([string]::IsNullOrWhiteSpace($raw)) { return '' }
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($raw -split '\r?\n')) {
+        if ($line -ne '') { [void]$lines.Add($line) }
+    }
+    if ($lines.Count -eq 0) { return '' }
+    $kept = New-Object System.Collections.Generic.List[string]
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $candidate = New-Object System.Collections.Generic.List[string]
+        [void]$candidate.Add([string]$lines[$i])
+        foreach ($older in $kept) { [void]$candidate.Add([string]$older) }
+        $text = [string]::Join("`n", $candidate.ToArray())
+        if (([uri]::EscapeDataString($text)).Length -le $MaxEncoded) {
+            $kept.Insert(0, [string]$lines[$i])
+            continue
+        }
+        if ($kept.Count -eq 0) {
+            $line = [string]$lines[$i]
+            $low = 0
+            $high = $line.Length
+            while ($low -lt $high) {
+                $mid = [int](($low + $high + 1) / 2)
+                $slice = $line.Substring($line.Length - $mid)
+                if (([uri]::EscapeDataString($slice)).Length -le $MaxEncoded) { $low = $mid } else { $high = $mid - 1 }
+            }
+            if ($low -gt 0) { return $line.Substring($line.Length - $low) }
+        }
+        break
+    }
+    if ($kept.Count -eq 0) { return '' }
+    return [string]::Join("`n", $kept.ToArray())
+}
+
+function Get-BugReportUrl {
+    param([string]$Activity = '')
+    $version = [uri]::EscapeDataString((Get-AppVersion))
+    $windows = [uri]::EscapeDataString((Get-WindowsLabel))
+    $url = "https://github.com/philipvern-dot/video-downloader/issues/new?template=bug_report.yml&version=$version&windows=$windows"
+    if (-not [string]::IsNullOrWhiteSpace($Activity)) {
+        $url = $url + '&activity=' + [uri]::EscapeDataString($Activity)
+    }
+    return $url
+}
+
+function Open-HttpLink([string]$Url) {
+    $allowed = $false
+    if ($Url -eq 'https://ko-fi.com/philipvern') { $allowed = $true }
+    elseif ($Url.StartsWith('https://github.com/philipvern-dot/video-downloader/issues/new?')) { $allowed = $true }
+    if (-not $allowed) { return }
+    Start-Process $Url
+}
+
+function Show-BugReport {
+    $form = New-Object Windows.Forms.Form
+    $form.Text = 'Video Beam'
+    $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.StartPosition = 'CenterParent'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.ShowInTaskbar = $false
+    $form.ClientSize = New-Object Drawing.Size(520, 262)
+    $form.Font = $script:FontUi
+    $form.BackColor = [Drawing.Color]::White
+    $icon = Get-AppIcon
+    if ($icon) { $form.Icon = $icon }
+    $label = New-Object Windows.Forms.Label
+    $label.Font = $script:FontUi
+    $label.ForeColor = $script:ColorInk
+    $label.BackColor = [Drawing.Color]::White
+    $label.SetBounds(24, 16, 472, 128)
+    $label.Text = "Report a bug opens a GitHub page. This version and the Windows version are filled in. Nothing else is added unless you check the box.`r`n`r`nInclude latest activity adds the latest lines from the activity box to that page. Those lines can include folder paths. This program does not send the report. You submit it on the GitHub page."
+    $include = New-Check 'Include latest activity'
+    $include.Checked = $false
+    $include.Enabled = -not [string]::IsNullOrWhiteSpace((Get-LatestActivityText))
+    $include.SetBounds(24, 156, 280, 24)
+    $open = New-Button 'Open report' 'primary' 140 34
+    $cancel = New-Button 'Cancel' 'secondary' 110 34
+    $open.SetBounds(238, 204, 140, 34)
+    $cancel.SetBounds(386, 204, 110, 34)
+    Set-Tip $open 'Open the GitHub page with this version filled in.'
+    Set-Tip $cancel 'Close this window without opening GitHub.'
+    $form.Controls.Add($label)
+    $form.Controls.Add($include)
+    $form.Controls.Add($open)
+    $form.Controls.Add($cancel)
+    $state = [pscustomobject]@{ Open = $false; Include = $false }
+    $open.DialogResult = [Windows.Forms.DialogResult]::OK
+    $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
+    $form.AcceptButton = $open
+    $form.CancelButton = $cancel
+    $open.Add_Click({ $state.Open = $true; $state.Include = [bool]$include.Checked }.GetNewClosure())
+    try { [void]$form.ShowDialog($script:Form) }
+    finally { $form.Dispose() }
+    if (-not $state.Open) { return }
+    $activity = ''
+    if ($state.Include) { $activity = Get-LatestActivityText }
+    Open-HttpLink (Get-BugReportUrl $activity)
+}
+
 function Update-UpdateButtons {
     $busy = Test-UpdateBusy
     if ($script:CheckUpdateButton) { $script:CheckUpdateButton.Enabled = -not $busy }
@@ -2112,12 +2228,20 @@ function Update-ChromeLayout {
     $header = $script:Header
     if ($header -and $header.ClientSize.Width -gt 0) {
         $reserve = 28
+        $leftEdge = $header.ClientSize.Width
         if ($script:CheckUpdateButton -and $script:UpdateButton) {
             $right = $header.ClientSize.Width - 24
-            $script:UpdateButton.Location = New-Object Drawing.Point(($right - $script:UpdateButton.Width), 20)
-            $script:CheckUpdateButton.Location = New-Object Drawing.Point(($script:UpdateButton.Left - 8 - $script:CheckUpdateButton.Width), 20)
-            $reserve = $header.ClientSize.Width - $script:CheckUpdateButton.Left + 16
+            $script:UpdateButton.Location = New-Object Drawing.Point(($right - $script:UpdateButton.Width), 16)
+            $script:CheckUpdateButton.Location = New-Object Drawing.Point(($script:UpdateButton.Left - 8 - $script:CheckUpdateButton.Width), 16)
+            $leftEdge = $script:CheckUpdateButton.Left
         }
+        if ($script:ReportBugButton -and $script:DonateButton) {
+            $right = $header.ClientSize.Width - 24
+            $script:ReportBugButton.Location = New-Object Drawing.Point(($right - $script:ReportBugButton.Width), 58)
+            $script:DonateButton.Location = New-Object Drawing.Point(($script:ReportBugButton.Left - 8 - $script:DonateButton.Width), 58)
+            if ($script:DonateButton.Left -lt $leftEdge) { $leftEdge = $script:DonateButton.Left }
+        }
+        $reserve = $header.ClientSize.Width - $leftEdge + 16
         $textWidth = [Math]::Max(160, ($header.ClientSize.Width - 28 - $reserve))
         $script:TitleLabel.SetBounds(28, 18, $textWidth, 36)
         $script:SubtitleLabel.SetBounds(28, 56, $textWidth, 40)
@@ -2195,7 +2319,7 @@ Enable-DoubleBuffer $script:Form
 
 $script:Header = New-Object Windows.Forms.Panel
 $script:Header.Dock = 'Top'
-$script:Header.Height = 108
+$script:Header.Height = 112
 $script:Header.BackColor = $script:ColorHeader
 $script:TitleLabel = New-Object Windows.Forms.Label
 $script:TitleLabel.Text = 'Video Beam'
@@ -2210,10 +2334,14 @@ $script:SubtitleLabel.BackColor = $script:ColorHeader
 $script:CheckUpdateButton = New-Button 'Check for updates' 'secondary' 168 34
 $script:UpdateButton = New-Button 'Update' 'primary' 100 34
 $script:UpdateButton.Enabled = $false
+$script:DonateButton = New-Button 'Donate' 'secondary' 96 28
+$script:ReportBugButton = New-Button 'Report a bug' 'secondary' 132 28
 $script:Header.Controls.Add($script:TitleLabel)
 $script:Header.Controls.Add($script:SubtitleLabel)
 $script:Header.Controls.Add($script:CheckUpdateButton)
 $script:Header.Controls.Add($script:UpdateButton)
+$script:Header.Controls.Add($script:DonateButton)
+$script:Header.Controls.Add($script:ReportBugButton)
 
 $script:StatusPanel = New-Object Windows.Forms.Panel
 $script:StatusPanel.Dock = 'Bottom'
@@ -2563,6 +2691,8 @@ Set-Tip $script:ChangeFolderButton 'Choose a different folder for new downloads.
 Set-Tip $script:OpenButton 'Open the current save folder in File Explorer.'
 Set-Tip $script:HelpButton 'Open a short guide to links, folders, skipping, and what each part of this folder is for.'
 Set-Tip $script:CheckUpdateButton 'Look on GitHub for a newer version of Video Beam.'
+Set-Tip $script:DonateButton 'Free forever. Tips of $5 or more can include a feature suggestion.'
+Set-Tip $script:ReportBugButton 'Open a GitHub bug report with this version and the Windows version filled in. Include latest activity is optional. Leave it unchecked and nothing else is added.'
 Set-Tip $script:UpdateButton 'Download the newer version and open its setup program. This window closes while that setup runs.'
 Set-Tip $script:Log 'Saved files, skipped videos, and problems are listed here.'
 Set-Tip $script:ProgressTrack 'How much of the current file has been downloaded.'
@@ -2584,6 +2714,8 @@ $script:CancelButton.Add_Click({ Request-Cancel })
 $script:OpenButton.Add_Click({ Open-DownloadsFolder })
 $script:HelpButton.Add_Click({ Show-Help })
 $script:CheckUpdateButton.Add_Click({ Start-UpdateCheck })
+$script:DonateButton.Add_Click({ Open-HttpLink 'https://ko-fi.com/philipvern' })
+$script:ReportBugButton.Add_Click({ Show-BugReport })
 $script:UpdateButton.Add_Click({ Start-UpdateInstall })
 
 $script:Form.Add_KeyDown({
@@ -2846,8 +2978,15 @@ function Invoke-SmokeTest {
     Assert-True ($script:HelpBox.Text -match 'Check for updates') 'The guide was missing updates'
     Assert-True ($script:CheckUpdateButton.Text -eq 'Check for updates') 'Check for updates was missing'
     Assert-True (-not $script:UpdateButton.Enabled) 'Update started enabled'
-    Assert-True ((Get-AppVersion) -eq '1.0.2') 'Version file was not 1.0.2'
-    Assert-True ($script:VersionLabel.Text -eq '1.0.2') 'The version was not shown'
+    Assert-True ((Get-AppVersion) -eq '1.0.3') 'Version file was not 1.0.3'
+    Assert-True ($script:VersionLabel.Text -eq '1.0.3') 'The version was not shown'
+    Assert-True ($script:DonateButton.Text -eq 'Donate') 'Donate was missing'
+    Assert-True ($script:ReportBugButton.Text -eq 'Report a bug') 'Report a bug was missing'
+    Assert-True ($script:DonateButton.Parent -eq $script:Header) 'Donate is not in the header'
+    Assert-True ($script:Tips.GetToolTip($script:DonateButton) -eq 'Free forever. Tips of $5 or more can include a feature suggestion.') 'Donate tooltip'
+    $bugUrl = Get-BugReportUrl 'saved one file'
+    Assert-True ($bugUrl.StartsWith('https://github.com/philipvern-dot/video-downloader/issues/new?template=bug_report.yml&')) 'Bug report link was not the GitHub form'
+    Assert-True ($bugUrl -match 'activity=') 'Bug report link dropped the activity'
     Assert-True ($null -ne $script:Form.Icon) 'The window has no icon'
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $script:Root 'Video Beam.lnk'))
     Assert-True ($shortcut.IconLocation -match 'vb-icon\.ico') 'The shortcut icon was not vb-icon.ico'
@@ -2887,6 +3026,14 @@ function Invoke-SmokeTest {
     Assert-True ($script:CheckUpdateButton.Enabled -and -not $script:UpdateButton.Enabled) 'Update buttons did not return to normal after the download'
     Assert-True ($script:TitleLabel.Right -le $script:CheckUpdateButton.Left) 'The title overlaps Check for updates'
     Assert-True ($script:UpdateButton.Right -le ($script:Header.ClientSize.Width - 8)) 'Update sits outside the header'
+    Assert-True ($script:ReportBugButton.Right -le ($script:Header.ClientSize.Width - 8)) 'Report a bug sits outside the header'
+    Assert-True ($script:DonateButton.Right -le ($script:ReportBugButton.Left + 1)) 'Donate overlaps Report a bug'
+    Assert-True ($script:DonateButton.Top -ge $script:UpdateButton.Bottom) 'Donate overlaps the update buttons'
+    Assert-True ($script:TitleLabel.Right -le $script:DonateButton.Left) 'The title overlaps Donate'
+    $script:Running = $true
+    Set-Busy $true
+    Assert-True ($script:DonateButton.Enabled -and $script:ReportBugButton.Enabled) 'Donate and Report a bug were disabled during a download'
+    Set-Busy $false
     $script:Saved = 0
     $script:Skipped = 0
     $script:Failed = 0
