@@ -1,6 +1,6 @@
 # Video Beam
 
-Version 1.0.3
+Version 1.0.4
 
 A Windows program that downloads videos and playlists as MP4 files, or audio only as MP3.
 
@@ -11,6 +11,10 @@ Paste one link, several links, or a playlist. New files go in the `downloads` fo
 Check for updates looks for a newer version on GitHub. The program also checks when it opens. Update downloads that version and opens the setup program. The setup replaces the installed copy and keeps your settings. The version is shown at the bottom right.
 
 Clip start and Clip end save part of one video. Leave the start blank to begin at the beginning, or the end blank to continue through the end. A playlist or several links are saved in full. The header names the folder new files go to, and the link box shows how many links are ready.
+
+## What's new in 1.0.4
+
+A clip downloads the video, then cuts it to the times you typed. The activity line says Cutting video, and the bar shows how far that cut has gotten. If YouTube refuses the download, the program tries again.
 
 ## What's new in 1.0.2
 

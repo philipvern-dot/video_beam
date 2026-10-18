@@ -146,7 +146,7 @@ $script:AudioArchiveFile = Join-Path $script:AppDir 'audio-history.txt'
 $script:UpdateRepo = 'video_beam'
 $script:UpdateAsset = 'video_beam.exe'
 $script:UpdateProduct = 'Video Beam'
-$script:UpdateFallback = '1.0.3'
+$script:UpdateFallback = '1.0.4'
 $script:UpdateOffer = $null
 $script:UpdateClosing = $false
 
@@ -471,6 +471,8 @@ function Get-ClipRequest {
         Stamp = ''
         StartLabel = 'the beginning'
         EndLabel = 'the end'
+        StartSeconds = $null
+        EndSeconds = $null
     }
     if ($null -eq $start -and $null -eq $end) { return $result }
     if (($null -ne $start -and $start -lt 0) -or ($null -ne $end -and $end -lt 0)) {
@@ -497,7 +499,23 @@ function Get-ClipRequest {
     $result.Stamp = ((Format-ClipFileStamp $start) + '-' + $stampEnd)
     $result.StartLabel = Format-ClipClock $start
     $result.EndLabel = $endLabel
+    $result.StartSeconds = $start
+    $result.EndSeconds = $end
     return $result
+}
+
+function Format-FfmpegTime([double]$seconds) {
+    if ($seconds -lt 0) { $seconds = 0 }
+    return ([math]::Round($seconds, 3)).ToString([Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Test-ClipNeedsCut($clip) {
+    if ($null -eq $clip) { return $false }
+    $start = 0.0
+    if ($null -ne $clip.StartSeconds) { $start = [double]$clip.StartSeconds }
+    $hasEnd = $null -ne $clip.EndSeconds
+    if ($start -le 0.05 -and -not $hasEnd) { return $false }
+    return $true
 }
 
 function Get-SaveFolderName {
@@ -545,8 +563,8 @@ function Get-YtArguments {
         [string]$BatchFile,
         [string]$Resolution = 'best',
         [bool]$AudioOnly = $false,
-        [string]$ClipSection = '',
-        [string]$ClipStamp = ''
+        [string]$ClipStamp = '',
+        [switch]$NoContinue
     )
     $template = '%(title).80s [%(id)s].%(ext)s'
     if ($Key -eq 'collection') {
@@ -578,11 +596,6 @@ function Get-YtArguments {
             $parts.Add($heightFormat)
         }
     }
-    if (-not [string]::IsNullOrWhiteSpace($ClipSection)) {
-        $parts.Add('--download-sections')
-        $parts.Add($ClipSection)
-        $parts.Add('--force-keyframes-at-cuts')
-    }
     if ($script:Deno -and (Test-Path -LiteralPath $script:Deno)) {
         $parts.Add('--js-runtimes')
         $parts.Add('deno:' + $script:Deno)
@@ -611,7 +624,7 @@ function Get-YtArguments {
     } elseif ($Key -eq 'collection') {
         $parts.Add('--yes-playlist')
     }
-    $remember = [bool]$SkipExisting -and [string]::IsNullOrWhiteSpace($ClipSection)
+    $remember = [bool]$SkipExisting -and [string]::IsNullOrWhiteSpace($ClipStamp)
     if ($remember) {
         $parts.Add('--download-archive')
         $parts.Add($ArchiveFile)
@@ -619,8 +632,99 @@ function Get-YtArguments {
     } else {
         $parts.Add('--force-overwrites')
     }
+    if ($NoContinue) {
+        $parts.Add('--no-continue')
+    }
     $parts.Add('-a')
     $parts.Add($BatchFile)
+    return $parts.ToArray()
+}
+
+function Get-MediaDuration([string]$path) {
+    $probe = Join-Path $script:ToolsDir 'ffprobe.exe'
+    if (-not (Test-Path -LiteralPath $probe) -or -not (Test-Path -LiteralPath $path)) { return 0 }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $probe
+    $psi.Arguments = ConvertTo-CommandLine @('-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', $path)
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [Diagnostics.Process]::Start($psi)
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+    $null = $errTask.Result
+    $dur = 0.0
+    $text = [string]$outTask.Result
+    if ([double]::TryParse($text.Trim(), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$dur)) {
+        return $dur
+    }
+    return 0
+}
+
+function Get-ClipCutArguments {
+    param(
+        [string]$InputPath,
+        [string]$OutputPath,
+        [double]$StartSeconds,
+        $EndSeconds
+    )
+    # Cut a file that is already on disk. Seeking with ffmpeg over a YouTube
+    # URL is throttled and shows no progress, so the download stays normal
+    # and this cut runs afterward. Re-encoding makes the cut match the typed
+    # times. A stream copy would start at the previous keyframe. -t is the
+    # length to keep, not an end time.
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add('-y')
+    $parts.Add('-hide_banner')
+    $parts.Add('-loglevel')
+    $parts.Add('error')
+    $parts.Add('-stats_period')
+    $parts.Add('0.5')
+    if ($StartSeconds -gt 0.05) {
+        $parts.Add('-ss')
+        $parts.Add((Format-FfmpegTime $StartSeconds))
+    }
+    $parts.Add('-i')
+    $parts.Add($InputPath)
+    if ($null -ne $EndSeconds) {
+        $duration = [double]$EndSeconds - $StartSeconds
+        if ($duration -lt 0.05) { $duration = 0.05 }
+        $parts.Add('-t')
+        $parts.Add((Format-FfmpegTime $duration))
+    }
+    $ext = [IO.Path]::GetExtension($OutputPath)
+    if ($ext -match '^\.mp3$') {
+        $parts.Add('-vn')
+        $parts.Add('-c:a')
+        $parts.Add('libmp3lame')
+        $parts.Add('-q:a')
+        $parts.Add('0')
+    } else {
+        $parts.Add('-map')
+        $parts.Add('0:v:0')
+        $parts.Add('-map')
+        $parts.Add('0:a:0?')
+        $parts.Add('-c:v')
+        $parts.Add('libx264')
+        $parts.Add('-preset')
+        $parts.Add('veryfast')
+        $parts.Add('-crf')
+        $parts.Add('18')
+        $parts.Add('-pix_fmt')
+        $parts.Add('yuv420p')
+        $parts.Add('-c:a')
+        $parts.Add('aac')
+        $parts.Add('-b:a')
+        $parts.Add('192k')
+        $parts.Add('-movflags')
+        $parts.Add('+faststart')
+    }
+    $parts.Add('-progress')
+    $parts.Add('pipe:1')
+    $parts.Add('-nostats')
+    $parts.Add($OutputPath)
     return $parts.ToArray()
 }
 
@@ -994,23 +1098,73 @@ function Read-PendingLines {
     return ,$batch
 }
 
+function Publish-SavedFile([string]$path) {
+    $script:Saved++
+    $root = ''
+    if ($script:DownloadsDir) { $root = $script:DownloadsDir.TrimEnd('\') }
+    $name = $path
+    if ($root -and $path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+        $name = $path.Substring($root.Length).TrimStart('\', '/')
+    } else {
+        $name = [IO.Path]::GetFileName($path)
+    }
+    Write-Activity "Saved  $name" 'ok'
+    Set-Status "Saved  $name" 'ok'
+}
+
+function Remove-ClipTemp {
+    if ($script:ClipTemp -and (Test-Path -LiteralPath $script:ClipTemp)) {
+        Remove-Item -LiteralPath $script:ClipTemp -Force -ErrorAction SilentlyContinue
+    }
+    $script:ClipTemp = $null
+}
+
+function Update-ClipProgress([double]$elapsedSeconds) {
+    if ($script:ClipPhase -ne 'cut') { return }
+    $pct = 0.0
+    if ($script:ClipDuration -gt 0) {
+        $pct = ($elapsedSeconds / [double]$script:ClipDuration) * 100.0
+    }
+    if ($pct -lt 0) { $pct = 0 }
+    if ($pct -gt 99) { $pct = 99 }
+    $script:LivePercent = $pct
+    $script:LiveDetail = 'cutting'
+}
+
 function Receive-Line([string]$line) {
     if ([string]::IsNullOrWhiteSpace($line)) { return }
     $line = $line.TrimEnd()
+    # ffmpeg -progress prints one field per line. out_time_us and out_time_ms
+    # are both microseconds on the bundled build.
+    if ($line -match '^out_time_us=(\d+)$' -or $line -match '^out_time_ms=(\d+)$') {
+        Update-ClipProgress ([double]$Matches[1] / 1000000.0)
+        return
+    }
+    if ($line -match '^out_time=(\d+):(\d+):(\d+(?:\.\d+)?)$') {
+        $elapsed = ([double]$Matches[1] * 3600) + ([double]$Matches[2] * 60) + [double]$Matches[3]
+        Update-ClipProgress $elapsed
+        return
+    }
+    if ($line -eq 'progress=end') {
+        if ($script:ClipPhase -eq 'cut') {
+            $script:LivePercent = 100
+            $script:LiveDetail = 'cutting'
+        }
+        return
+    }
+    if ($line -match '^(frame|fps|bitrate|total_size|dup_frames|drop_frames|speed|progress|stream_\d+_\d+_q)=') {
+        return
+    }
     Remember-Raw $line
 
     if ($line.StartsWith('YD_SAVED:')) {
-        $script:Saved++
         $path = $line.Substring(9).Trim().Trim('"')
-        $root = $script:DownloadsDir.TrimEnd('\')
-        $name = $path
-        if ($path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
-            $name = $path.Substring($root.Length).TrimStart('\', '/')
-        } else {
-            $name = [IO.Path]::GetFileName($path)
+        if ($script:ActiveClip -and $script:ClipPhase -eq 'download') {
+            $script:ClipSource = $path
+            Set-Status 'Cutting video' 'busy'
+            return
         }
-        Write-Activity "Saved  $name" 'ok'
-        Set-Status "Saved  $name" 'ok'
+        Publish-SavedFile $path
         return
     }
     if ($line -match 'has already been downloaded') {
@@ -1069,6 +1223,13 @@ function Receive-Line([string]$line) {
 
 function Update-LiveProgress {
     if (-not $script:Running) { return }
+    if ($script:ClipPhase -eq 'cut') {
+        if ($script:LivePercent -lt 0) { return }
+        $cutPct = [double]$script:LivePercent
+        Set-Progress $cutPct
+        Set-Status ("Cutting video   {0:N0}%" -f $cutPct) 'busy'
+        return
+    }
     $pumpPercent = [double][VideoDownloader.YtLinePump]::LivePercent
     if ($pumpPercent -ge 0) {
         $script:LivePercent = $pumpPercent
@@ -1092,6 +1253,33 @@ function Update-LiveProgress {
     if ($eta -and $eta -ne 'Unknown') { $bits.Add("ETA $eta") }
     if ($script:CurrentName) { $bits.Add([string]$script:CurrentName) }
     Set-Status ($bits -join '   ') 'busy'
+}
+
+function Test-DownloadRefused {
+    if (-not $script:RecentRaw) { return $false }
+    foreach ($line in $script:RecentRaw) {
+        if ([string]$line -match 'HTTP Error 403') { return $true }
+    }
+    return $false
+}
+
+function Remove-RefusedPartials {
+    $folder = [string]$script:DownloadsDir
+    if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder)) { return }
+    $since = [DateTime]::MinValue
+    if ($script:JobStarted) { $since = $script:JobStarted.AddSeconds(-5) }
+    $stamp = ''
+    if ($script:ActiveClip) { $stamp = [string]$script:ActiveClip.Stamp }
+    foreach ($pattern in @('*.part', '*.ytdl')) {
+        $files = @(Get-ChildItem -LiteralPath $folder -File -Recurse -Filter $pattern -ErrorAction SilentlyContinue)
+        foreach ($file in $files) {
+            $named = $stamp -and ($file.Name -like ('*' + $stamp + '*'))
+            $fresh = $file.LastWriteTime -ge $since
+            if ($named -or $fresh) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 function Remove-BatchFile {
@@ -1130,18 +1318,27 @@ function Get-JobLabel($job) {
 
 function Complete-Run([bool]$cancelled) {
     Remove-BatchFile
+    Remove-ClipTemp
     if ($script:Process) {
         try { $script:Process.Dispose() } catch { }
         $script:Process = $null
     }
+    $fullLeftBehind = $false
+    if ($cancelled -and $script:ClipSource -and (Test-Path -LiteralPath $script:ClipSource) -and $script:Saved -eq 0) {
+        $fullLeftBehind = $true
+    }
     $script:Running = $false
     $script:ActiveClip = $null
+    $script:ClipPhase = ''
+    $script:ClipSource = $null
+    $script:ClipDuration = 0
     $script:LivePercent = -1
     $script:LiveDetail = ''
     Set-Busy $false
     if ($cancelled) {
         Set-Progress 0
-        if ($script:Saved -eq 0) { $text = 'Cancelled. Nothing was saved.' }
+        if ($fullLeftBehind) { $text = 'Cancelled. The full video was saved, and the clip was not cut.' }
+        elseif ($script:Saved -eq 0) { $text = 'Cancelled. Nothing was saved.' }
         else { $text = "Cancelled. $(Format-Count $script:Saved 'file') saved before the stop." }
         Set-Status $text 'err'
         Write-Activity $text 'warn'
@@ -1172,13 +1369,17 @@ function Start-JobProcess($job) {
         $archive = $script:AudioArchiveFile
         $audioOnly = $true
     }
-    $clipSection = ''
     $clipStamp = ''
+    $script:ClipPhase = ''
+    $script:ClipSource = $null
+    $script:ClipDuration = 0
+    Remove-ClipTemp
     if ($script:ActiveClip -and $job.Key -ne 'collection') {
-        $clipSection = [string]$script:ActiveClip.Section
         $clipStamp = [string]$script:ActiveClip.Stamp
+        $script:ClipPhase = 'download'
     }
-    $argParts = Get-YtArguments -Key $job.Key -PlaylistFolders $script:FolderCheck.Checked -SkipExisting $script:SkipCheck.Checked -Destination $script:DownloadsDir -ArchiveFile $archive -BatchFile $script:BatchFile -Resolution (Get-SelectedResolution) -AudioOnly $audioOnly -ClipSection $clipSection -ClipStamp $clipStamp
+    $script:JobStarted = Get-Date
+    $argParts = Get-YtArguments -Key $job.Key -PlaylistFolders $script:FolderCheck.Checked -SkipExisting $script:SkipCheck.Checked -Destination $script:DownloadsDir -ArchiveFile $archive -BatchFile $script:BatchFile -Resolution (Get-SelectedResolution) -AudioOnly $audioOnly -ClipStamp $clipStamp -NoContinue:($script:ForbiddenRetries -gt 0)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $script:YtDlp
     $psi.Arguments = ConvertTo-CommandLine $argParts
@@ -1192,6 +1393,7 @@ function Start-JobProcess($job) {
     $psi.StandardErrorEncoding = $utf8out
     $psi.EnvironmentVariables['PATH'] = $script:ToolsDir + ';' + $psi.EnvironmentVariables['PATH']
     $psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
+    $psi.EnvironmentVariables['PYTHONUNBUFFERED'] = '1'
     if ($script:DetailedCheck.Checked) {
         Write-Activity ('Command  ' + $psi.FileName + ' ' + $psi.Arguments) 'dim'
     }
@@ -1226,6 +1428,7 @@ function Start-NextJob {
         Complete-Run $true
         return
     }
+    $script:ForbiddenRetries = 0
     $jobs = @($script:Jobs)
     if ($null -eq $script:Jobs -or $script:JobPos -ge $jobs.Count) {
         Complete-Run $false
@@ -1247,6 +1450,115 @@ function Start-NextJob {
     }
 }
 
+function Start-ClipCut {
+    $source = [string]$script:ClipSource
+    if (-not (Test-Path -LiteralPath $source)) {
+        $script:Failed++
+        Write-Activity 'The clip could not be cut because the download is missing.' 'err'
+        return $false
+    }
+    $ext = [IO.Path]::GetExtension($source)
+    if ([string]::IsNullOrWhiteSpace($ext)) { $ext = '.mp4' }
+    $tempOut = $source + '.cutting' + $ext
+    if (Test-Path -LiteralPath $tempOut) { Remove-Item -LiteralPath $tempOut -Force }
+    $script:ClipTemp = $tempOut
+    $start = 0.0
+    if ($script:ActiveClip -and $null -ne $script:ActiveClip.StartSeconds) {
+        $start = [double]$script:ActiveClip.StartSeconds
+    }
+    $end = $null
+    if ($script:ActiveClip -and $null -ne $script:ActiveClip.EndSeconds) {
+        $end = [double]$script:ActiveClip.EndSeconds
+    }
+    $media = Get-MediaDuration $source
+    if ($null -ne $end) {
+        $script:ClipDuration = $end - $start
+    } elseif ($media -gt $start) {
+        $script:ClipDuration = $media - $start
+    } else {
+        $script:ClipDuration = 0
+    }
+    if ($script:ClipDuration -lt 0) { $script:ClipDuration = 0 }
+    $script:CurrentName = [IO.Path]::GetFileName($source)
+    $argParts = Get-ClipCutArguments -InputPath $source -OutputPath $tempOut -StartSeconds $start -EndSeconds $end
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $script:Ffmpeg
+    $psi.Arguments = ConvertTo-CommandLine $argParts
+    $psi.WorkingDirectory = $script:Root
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $utf8out = New-Object System.Text.UTF8Encoding $false
+    $psi.StandardOutputEncoding = $utf8out
+    $psi.StandardErrorEncoding = $utf8out
+    if ($script:DetailedCheck.Checked) {
+        Write-Activity ('Command  ' + $psi.FileName + ' ' + $psi.Arguments) 'dim'
+    }
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    $proc.EnableRaisingEvents = $true
+    $script:Process = $proc
+    $script:ClipPhase = 'cut'
+    $script:ExitSeen = $false
+    $script:ExitGraceDone = $false
+    $script:JobCleaned = $false
+    $script:ExitCode = 0
+    $script:LivePercent = -1
+    $script:LiveDetail = ''
+    $script:RecentRaw = New-Object System.Collections.Generic.List[string]
+    Ensure-OutputHandlers
+    [VideoDownloader.YtLinePump]::BeginJob()
+    $proc.add_OutputDataReceived($script:DataHandler)
+    $proc.add_ErrorDataReceived($script:DataHandler)
+    $proc.add_Exited($script:ExitHandler)
+    [void]$proc.Start()
+    $proc.BeginOutputReadLine()
+    $proc.BeginErrorReadLine()
+    Write-Activity 'Cutting video' 'text'
+    Set-Status 'Cutting video' 'busy'
+    Set-Progress 0
+    return $true
+}
+
+function Complete-ClipCut([int]$code) {
+    $temp = [string]$script:ClipTemp
+    $source = [string]$script:ClipSource
+    $ok = $false
+    if ($code -eq 0 -and $temp -and (Test-Path -LiteralPath $temp)) {
+        $len = (Get-Item -LiteralPath $temp).Length
+        if ($len -ge 1024) { $ok = $true }
+    }
+    if (-not $ok) {
+        Remove-ClipTemp
+        $script:Failed++
+        Write-Activity 'The clip could not be cut. The full download is still in the save folder.' 'err'
+        if ($script:RecentRaw -and $script:RecentRaw.Count -gt 0) {
+            $start = [Math]::Max(0, $script:RecentRaw.Count - 8)
+            for ($i = $start; $i -lt $script:RecentRaw.Count; $i++) {
+                Write-Activity $script:RecentRaw[$i] 'dim'
+            }
+        }
+        return
+    }
+    $backup = $source + '.fulltmp'
+    try {
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
+        Move-Item -LiteralPath $source -Destination $backup
+        Move-Item -LiteralPath $temp -Destination $source
+        Remove-Item -LiteralPath $backup -Force
+        $script:ClipTemp = $null
+        Publish-SavedFile $source
+    } catch {
+        Remove-ClipTemp
+        if ((Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $source)) {
+            Move-Item -LiteralPath $backup -Destination $source -Force
+        }
+        $script:Failed++
+        Write-Activity ('The clip could not be saved. ' + $_.Exception.Message) 'err'
+    }
+}
+
 function Finish-CurrentJob {
     $code = 0
     if ($null -ne $script:ExitCode) { $code = [int]$script:ExitCode }
@@ -1254,10 +1566,41 @@ function Finish-CurrentJob {
         try { $script:Process.Dispose() } catch { }
         $script:Process = $null
     }
-    Remove-BatchFile
+    if ($script:ClipPhase -ne 'cut') { Remove-BatchFile }
     if ($script:CancelRequested) {
         Complete-Run $true
         return
+    }
+    if ($script:ClipPhase -eq 'cut') {
+        Complete-ClipCut $code
+        $script:ClipPhase = ''
+        $script:ClipSource = $null
+        Start-NextJob
+        return
+    }
+    if ((Test-DownloadRefused) -and $script:ForbiddenRetries -lt 2) {
+        if ($script:Failed -gt 0) { $script:Failed-- }
+        $script:JobHadError = $false
+        $script:ForbiddenRetries++
+        Remove-RefusedPartials
+        Write-Activity 'YouTube refused that download. Trying again.' 'warn'
+        Set-Status 'Trying that download again...' 'busy'
+        Set-Progress 0
+        $jobs = @($script:Jobs)
+        $job = $null
+        if ($script:JobPos -gt 0 -and $script:JobPos -le $jobs.Count) {
+            $job = $jobs[$script:JobPos - 1]
+        }
+        if ($null -ne $job) {
+            try {
+                Start-JobProcess $job
+                return
+            } catch {
+                Write-Activity ('Could not try that download again. ' + $_.Exception.Message) 'err'
+                $script:Failed++
+                $script:JobHadError = $true
+            }
+        }
     }
     if ($code -ne 0 -and -not $script:JobHadError) {
         $script:Failed++
@@ -1268,6 +1611,22 @@ function Finish-CurrentJob {
                 Write-Activity $script:RecentRaw[$i] 'dim'
             }
         }
+    }
+    if ($script:ClipPhase -eq 'download' -and $script:ClipSource) {
+        $sourceOk = $false
+        if (Test-Path -LiteralPath $script:ClipSource) {
+            $sourceOk = ((Get-Item -LiteralPath $script:ClipSource).Length -ge 1024)
+        }
+        $clean = ($code -eq 0 -and -not $script:JobHadError -and $sourceOk)
+        if ($clean -and (Test-ClipNeedsCut $script:ActiveClip)) {
+            if (Start-ClipCut) { return }
+        } elseif ($clean) {
+            Publish-SavedFile $script:ClipSource
+        } else {
+            Write-Activity 'The clip was not cut.' 'warn'
+        }
+        $script:ClipSource = $null
+        $script:ClipPhase = ''
     }
     Start-NextJob
 }
@@ -1499,6 +1858,7 @@ function Start-Download {
     $script:Skipped = 0
     $script:Failed = 0
     $script:CancelRequested = $false
+    $script:ForbiddenRetries = 0
     $script:LivePercent = -1
     $script:Process = $null
     Set-Busy $true
@@ -1506,7 +1866,7 @@ function Start-Download {
     Write-Activity '--------' 'dim'
     Write-Activity 'Starting download.' 'text'
     if ($script:ActiveClip) {
-        Write-Activity ("Saving a clip from $($script:ActiveClip.StartLabel) to $($script:ActiveClip.EndLabel).") 'text'
+        Write-Activity ("Saving a clip from $($script:ActiveClip.StartLabel) to $($script:ActiveClip.EndLabel). The full video downloads first, then it is cut.") 'text'
     }
     if ($parsed.DuplicateCount -gt 0) {
         Write-Activity ("Left out $(Format-Count $parsed.DuplicateCount 'duplicate link').") 'dim'
@@ -1611,7 +1971,7 @@ function Get-HelpSections {
         },
         @{
             Title = 'Picture size and audio only'
-            Body = "Resolution is used when a video offers more than one picture size. Best available keeps the usual choice: the best MP4 that plays in ordinary video players. Pick a size such as 1080p or 720p to prefer that size. If the video does not offer it, the closest size that does exist is used. A video with only one size is downloaded as it is.`r`n`r`nAudio only, save as MP3 keeps the soundtrack and does not save a picture. The file is a high-quality MP3. Videos you already saved are not replaced.`r`n`r`nClip start and Clip end save part of one video. Type the time as m:ss, such as 1:30. For an hour or more, type 1:02:05. A plain number such as 90 means 90 seconds. Leave the start blank to begin at the beginning. Leave the end blank to continue to the end of the video. The times are used only when the box has one video link. A playlist or several links are saved in full, and the activity box says so. The clip's file name includes the times, so a full copy of that video stays where it is."
+            Body = "Resolution is used when a video offers more than one picture size. Best available keeps the usual choice: the best MP4 that plays in ordinary video players. Pick a size such as 1080p or 720p to prefer that size. If the video does not offer it, the closest size that does exist is used. A video with only one size is downloaded as it is.`r`n`r`nAudio only, save as MP3 keeps the soundtrack and does not save a picture. The file is a high-quality MP3. Videos you already saved are not replaced.`r`n`r`nClip start and Clip end save part of one video. Type the time as m:ss, such as 1:30. For an hour or more, type 1:02:05. A plain number such as 90 means 90 seconds. Leave the start blank to begin at the beginning. Leave the end blank to continue to the end of the video. The times are used only when the box has one video link. A playlist or several links are saved in full, and the activity box says so. The full video downloads first, then the clip is cut to the times you typed. The clip's file name includes the times, so a full copy of that video stays where it is."
         },
         @{
             Title = 'What is inside the MP4'
@@ -2284,6 +2644,13 @@ $script:Saved = 0
 $script:Skipped = 0
 $script:Failed = 0
 $script:CancelRequested = $false
+$script:ForbiddenRetries = 0
+$script:JobStarted = [DateTime]::MinValue
+$script:ActiveClip = $null
+$script:ClipPhase = ''
+$script:ClipSource = $null
+$script:ClipTemp = $null
+$script:ClipDuration = 0
 $script:PendingLines = New-Object System.Collections.ArrayList
 $script:QueueLock = New-Object Object
 $script:RecentRaw = New-Object System.Collections.Generic.List[string]
@@ -2698,7 +3065,7 @@ Set-Tip $script:Log 'Saved files, skipped videos, and problems are listed here.'
 Set-Tip $script:ProgressTrack 'How much of the current file has been downloaded.'
 Set-Tip $script:StatusLabel 'What the program is doing right now.'
 Set-Tip $script:VersionLabel 'This copy of Video Beam.'
-Set-Tip $script:ClipStartBox 'Where the clip begins. Type 1:30 for one minute and 30 seconds. For an hour or more, type 1:02:05. 90 means 90 seconds. Leave this blank to start at the beginning. Used only when the box has one video link.'
+Set-Tip $script:ClipStartBox 'Where the clip begins. Type 1:30 for one minute and 30 seconds. For an hour or more, type 1:02:05. 90 means 90 seconds. Leave this blank to start at the beginning. The full video downloads first, then the clip is cut. Used only when the box has one video link.'
 Set-Tip $script:ClipEndBox 'Where the clip ends. Type 4:15 for four minutes and 15 seconds. Leave this blank to continue to the end of the video.'
 Set-Tip $script:ClipStartLabel 'Where the clip begins. The time is m:ss, such as 1:30.'
 Set-Tip $script:ClipEndLabel 'Where the clip ends. The time is m:ss, such as 4:15.'
@@ -2784,6 +3151,58 @@ function Assert-True([bool]$condition, [string]$message) {
     if (-not $condition) { throw $message }
 }
 
+function Invoke-Tool([string]$file, [string[]]$argParts) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $file
+    $psi.Arguments = ConvertTo-CommandLine $argParts
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $utf8out = New-Object System.Text.UTF8Encoding $false
+    $psi.StandardOutputEncoding = $utf8out
+    $psi.StandardErrorEncoding = $utf8out
+    $proc = [Diagnostics.Process]::Start($psi)
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+    return [pscustomobject]@{
+        Code = [int]$proc.ExitCode
+        Out = [string]$outTask.Result
+        Err = [string]$errTask.Result
+    }
+}
+
+function Invoke-ClipCutCheck {
+    $dir = Join-Path $env:TEMP 'vd-clip-check'
+    if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    try {
+        $src = Join-Path $dir 'src.mp4'
+        $out = Join-Path $dir 'out.mp4'
+        $make = @(
+            '-y', '-hide_banner', '-loglevel', 'error',
+            '-f', 'lavfi', '-i', 'color=c=black:s=160x120:r=25:d=4',
+            '-f', 'lavfi', '-i', 'sine=f=440:d=4',
+            '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '25', '-keyint_min', '25',
+            '-c:a', 'aac', $src
+        )
+        $made = Invoke-Tool $script:Ffmpeg $make
+        Assert-True ($made.Code -eq 0 -and (Test-Path -LiteralPath $src)) ("Could not make a sample video for the clip cut: " + $made.Err)
+        $cutArgs = Get-ClipCutArguments -InputPath $src -OutputPath $out -StartSeconds 1 -EndSeconds 3
+        $cut = Invoke-Tool $script:Ffmpeg $cutArgs
+        Assert-True ($cut.Code -eq 0 -and (Test-Path -LiteralPath $out)) ("The sample clip was not cut: " + $cut.Err)
+        $probe = Join-Path $script:ToolsDir 'ffprobe.exe'
+        $info = Invoke-Tool $probe @('-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', $out)
+        $durText = $info.Out.Trim()
+        $dur = 0.0
+        $parsed = [double]::TryParse($durText, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$dur)
+        Assert-True ($parsed -and $dur -gt 1.85 -and $dur -lt 2.2) "Clip duration was $durText"
+    } finally {
+        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Invoke-SelfCheck {
     $missing = @(Get-MissingTools)
     Assert-True ($missing.Count -eq 0) ("Missing tools: " + ($missing -join ', '))
@@ -2821,13 +3240,29 @@ function Invoke-SelfCheck {
     Assert-True ($videoLine.Contains('"E:\Youtube Downloads\downloads"')) "Path was not quoted: $videoLine"
     Assert-True (-not ($videoArgs -contains '-f')) 'Best resolution should not add a format filter'
     Assert-True ($videoArgs -contains '--download-archive') 'Skip existing did not use the history'
-    $clipArgs = Get-YtArguments -Key 'video' -PlaylistFolders $true -SkipExisting $true -Destination 'E:\Youtube Downloads\downloads' -ArchiveFile 'E:\Youtube Downloads\app\download-history.txt' -BatchFile 'C:\temp\list.txt' -ClipSection '*0:01:30-0:03:00' -ClipStamp '1m30s-3m00s'
-    Assert-True ($clipArgs -contains '--download-sections') 'A clip did not ask for a section'
-    Assert-True ($clipArgs -contains '*0:01:30-0:03:00') 'A clip used the wrong range'
-    Assert-True ($clipArgs -contains '--force-keyframes-at-cuts') 'A clip did not cut at the typed times'
+    $clipArgs = Get-YtArguments -Key 'video' -PlaylistFolders $true -SkipExisting $true -Destination 'E:\Youtube Downloads\downloads' -ArchiveFile 'E:\Youtube Downloads\app\download-history.txt' -BatchFile 'C:\temp\list.txt' -ClipStamp '1m30s-3m00s'
+    Assert-True (-not ($clipArgs -contains '--download-sections')) 'A clip asked yt-dlp to cut during the download'
+    Assert-True (-not ($clipArgs -contains '--force-keyframes-at-cuts')) 'A clip asked ffmpeg to re-encode the download'
     Assert-True (-not ($clipArgs -contains '--download-archive')) 'A clip used the full-video history'
+    Assert-True ($clipArgs -contains '--force-overwrites') 'A clip did not replace its own file'
+    Assert-True (-not ($clipArgs -contains '--no-continue')) 'The first clip attempt refused to resume'
+    $retryArgs = Get-YtArguments -Key 'video' -PlaylistFolders $true -SkipExisting $true -Destination 'E:\Youtube Downloads\downloads' -ArchiveFile 'E:\Youtube Downloads\app\download-history.txt' -BatchFile 'C:\temp\list.txt' -ClipStamp '1m30s-3m00s' -NoContinue
+    Assert-True ($retryArgs -contains '--no-continue') 'A refused download did not start over'
     $clipTemplate = $clipArgs[[array]::IndexOf($clipArgs, '-o') + 1]
     Assert-True ($clipTemplate -match '1m30s-3m00s') "Clip file name was $clipTemplate"
+    $fromStart = Get-ClipCutArguments -InputPath 'C:\clip-in.mp4' -OutputPath 'C:\clip-out.mp4' -StartSeconds 0 -EndSeconds 120
+    Assert-True (-not ($fromStart -contains '-ss')) 'A clip that starts at the beginning still seeked'
+    Assert-True ($fromStart[[array]::IndexOf($fromStart, '-t') + 1] -eq '120') 'A clip from the start used the wrong length'
+    $midCut = Get-ClipCutArguments -InputPath 'C:\clip-in.mp4' -OutputPath 'C:\clip-out.mp4' -StartSeconds 90 -EndSeconds 180
+    Assert-True ($midCut[[array]::IndexOf($midCut, '-ss') + 1] -eq '90') 'A clip seeked to the wrong time'
+    Assert-True ($midCut[[array]::IndexOf($midCut, '-t') + 1] -eq '90') 'A clip kept the wrong length'
+    Assert-True ($midCut -contains 'libx264') 'A clip cut did not re-encode the picture'
+    Assert-True ($midCut -contains 'pipe:1') 'A clip cut did not report progress'
+    $openEnd = Get-ClipCutArguments -InputPath 'C:\clip-in.mp3' -OutputPath 'C:\clip-out.mp3' -StartSeconds 15 -EndSeconds $null
+    Assert-True ($openEnd -contains '-ss' -and -not ($openEnd -contains '-t')) 'An open-ended clip was given a length'
+    Assert-True ($openEnd -contains 'libmp3lame') 'An MP3 clip did not re-encode the audio'
+    Assert-True (-not ($openEnd -contains '+faststart')) 'An MP3 clip asked for an MP4 flag'
+    Invoke-ClipCutCheck
     Assert-True ((ConvertTo-ClipSeconds '1:30') -eq 90) 'm:ss was not read as seconds'
     Assert-True ((ConvertTo-ClipSeconds '1:02:05') -eq 3725) 'h:mm:ss was not read'
     Assert-True ((ConvertTo-ClipSeconds '90') -eq 90) 'Plain seconds were not read'
@@ -2975,11 +3410,12 @@ function Invoke-SmokeTest {
     [IO.File]::WriteAllText((Join-Path $env:TEMP 'vd-log.txt'), $script:Log.Text)
     Assert-True ($script:Log.Text -match 'Paste a video or playlist link') 'Startup instructions were not in the activity box'
     Assert-True ($script:HelpBox.Text -match 'Where the files go') 'The guide was missing its folder section'
+    Assert-True ($script:HelpBox.Text -match 'full video downloads first') 'The guide still described the old clip download'
     Assert-True ($script:HelpBox.Text -match 'Check for updates') 'The guide was missing updates'
     Assert-True ($script:CheckUpdateButton.Text -eq 'Check for updates') 'Check for updates was missing'
     Assert-True (-not $script:UpdateButton.Enabled) 'Update started enabled'
-    Assert-True ((Get-AppVersion) -eq '1.0.3') 'Version file was not 1.0.3'
-    Assert-True ($script:VersionLabel.Text -eq '1.0.3') 'The version was not shown'
+    Assert-True ((Get-AppVersion) -eq '1.0.4') 'Version file was not 1.0.4'
+    Assert-True ($script:VersionLabel.Text -eq '1.0.4') 'The version was not shown'
     Assert-True ($script:DonateButton.Text -eq 'Donate') 'Donate was missing'
     Assert-True ($script:ReportBugButton.Text -eq 'Report a bug') 'Report a bug was missing'
     Assert-True ($script:DonateButton.Parent -eq $script:Header) 'Donate is not in the header'
@@ -3000,6 +3436,7 @@ function Invoke-SmokeTest {
     $script:ClipEndBox.Text = '3:00'
     $readyClip = Get-ClipRequest
     Assert-True ($readyClip.Active -and $readyClip.Section -eq '*0:01:30-0:03:00') ("Clip section was $($readyClip.Section)")
+    Assert-True ($readyClip.StartSeconds -eq 90 -and $readyClip.EndSeconds -eq 180) ("Clip seconds were $($readyClip.StartSeconds)-$($readyClip.EndSeconds)")
     $script:ClipStartBox.Text = ''
     $script:ClipEndBox.Text = ''
     Assert-True (-not [string]::IsNullOrWhiteSpace($script:Tips.GetToolTip($script:VersionLabel))) 'Version tooltip was missing'
@@ -3049,6 +3486,30 @@ function Invoke-SmokeTest {
     Assert-True ($script:Failed -eq 1) "Parser failed $($script:Failed)"
     Assert-True ($script:ItemIndex -eq 2 -and $script:ItemCount -eq 10) 'Parser item counter'
     Assert-True ([math]::Abs($script:LivePercent - 45.2) -lt 0.01) "Parser percent $($script:LivePercent)"
+    $script:ClipPhase = 'cut'
+    $script:ClipDuration = 10
+    $script:ItemCount = 0
+    $script:CurrentName = 'clip.mp4'
+    $script:DetailedCheck.Checked = $true
+    $script:Running = $true
+    $cutLog = $script:Log.Text
+    Receive-Line 'stream_0_0_q=24.0'
+    Receive-Line 'frame=120'
+    Receive-Line 'out_time_us=5000000'
+    Receive-Line 'speed=3.50x'
+    Assert-True ($script:Log.Text -eq $cutLog) 'Ffmpeg progress was written to the activity'
+    Assert-True ([math]::Abs($script:LivePercent - 50) -lt 0.01) "Cut percent was $($script:LivePercent)"
+    Update-LiveProgress
+    Assert-True ($script:StatusLabel.Text -eq 'Cutting video   50%') "Cut status was $($script:StatusLabel.Text)"
+    Assert-True ([math]::Abs($script:ProgressValue - 50) -lt 0.01) "Cut bar was $($script:ProgressValue)"
+    $script:ClipPhase = ''
+    $script:Running = $false
+    $script:DetailedCheck.Checked = $false
+    $script:RecentRaw = New-Object System.Collections.Generic.List[string]
+    $script:RecentRaw.Add('ERROR: unable to download video data: HTTP Error 403: Forbidden')
+    Assert-True (Test-DownloadRefused) 'A 403 was not treated as a refusal'
+    $script:RecentRaw.Clear()
+    Assert-True (-not (Test-DownloadRefused)) 'An empty log was treated as a refusal'
     if ($script:HelpForm) { $script:HelpForm.Close() }
     $script:Form.Close()
     Write-Output 'SMOKE OK'
